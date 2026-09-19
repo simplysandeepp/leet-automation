@@ -1,0 +1,2 @@
+# Local credentials and configuration must never be committed.
+.env
