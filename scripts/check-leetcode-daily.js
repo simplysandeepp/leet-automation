@@ -130,7 +130,7 @@ async function main() {
     '🥳 Completed',
     formatUsernames(completed, 'No completions yet.'),
     '',
-    '⚠️ Still Pending\n👀',
+    'Still Pending 👀',
     formatUsernames(pending, 'Everyone has completed it.'),
     '',
     '🔒 Couldn\'t verify',
