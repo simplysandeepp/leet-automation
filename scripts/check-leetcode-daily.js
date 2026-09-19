@@ -73,8 +73,10 @@ function startOfUtcDayUnixSeconds(dateString) {
   return Math.floor(milliseconds / 1000);
 }
 
-function formatList(usernames, emoji, emptyText) {
-  return usernames.length ? usernames.map((username) => `${emoji} ${username}`).join('\n') : emptyText;
+function formatUsernames(usernames, emptyText) {
+  return usernames.length
+    ? usernames.map((username) => `• @${username.replace(/^@/, '')}`).join('\n')
+    : emptyText;
 }
 
 async function main() {
@@ -102,37 +104,45 @@ async function main() {
         limit: RECENT_SUBMISSION_LIMIT,
       });
       const submissions = data.recentAcSubmissionList ?? [];
+      // LeetCode may return no public history for a profile. Do not label that
+      // user as pending when the API cannot verify their status.
+      if (!submissions.length) return { username, status: 'unavailable' };
       const completed = submissions.some((submission) =>
         submission.titleSlug === daily.question.titleSlug
         && Number(submission.timestamp) >= dailyStart,
       );
-      return { username, completed };
+      return { username, status: completed ? 'completed' : 'pending' };
     } catch (error) {
-      // Treat inaccessible/unknown profiles as incomplete, while preserving
-      // the reason in GitHub Actions logs for diagnosis.
+      // Do not shame inaccessible or unknown profiles as pending.
       console.error(`Could not check ${username}: ${error.message}`);
-      return { username, completed: false };
+      return { username, status: 'unavailable' };
     }
   }));
 
-  const completed = results.filter((result) => result.completed).map((result) => result.username);
-  const notCompleted = results.filter((result) => !result.completed).map((result) => result.username);
+  const completed = results.filter((result) => result.status === 'completed').map((result) => result.username);
+  const pending = results.filter((result) => result.status === 'pending').map((result) => result.username);
+  const unavailable = results.filter((result) => result.status === 'unavailable').map((result) => result.username);
   const message = [
-    '🚀 Heyy Coders! 👋',
-    `📌 Today\'s LeetCode Daily: ${daily.question.title}`,
-    '⏳ There is still time—solve it now and don\'t lose your streak! 🔥',
+    '📚 LeetCode Daily Check-in',
+    `Today\'s challenge: ${daily.question.title}`,
+    'There is still time—keep your streak going.',
     '',
-    '✅ Completed 🎉',
-    formatList(completed, '🥳', 'No one yet — go get it! 💪'),
+    '✅ Completed',
+    formatUsernames(completed, 'No completions yet.'),
     '',
-    '⚠️ Still Pending 🚨',
-    formatList(notCompleted, '👀', '🎊 Everyone has completed it!'),
+    '⏰ Still to solve',
+    formatUsernames(pending, 'Everyone has completed it.'),
+    '',
+    '🔒 Couldn\'t verify',
+    unavailable.length
+      ? unavailable.map((username) => `• @${username.replace(/^@/, '')} — recent submissions may be hidden.`).join('\n')
+      : 'No verification issues.',
   ].join('\n');
 
   const telegramResponse = await fetch(
     `https://api.telegram.org/bot${telegramBotToken}/sendMessage`,
     {
-    method: 'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: telegramChatId,
