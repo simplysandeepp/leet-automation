@@ -118,14 +118,15 @@ async function main() {
   const completed = results.filter((result) => result.completed).map((result) => result.username);
   const notCompleted = results.filter((result) => !result.completed).map((result) => result.username);
   const message = [
-    '👋 Good evening, LeetCode crew!',
-    `Today\'s Daily Challenge: ${daily.question.title} (${daily.question.titleSlug})`,
+    '🚀 Heyy Coders! 👋',
+    `📌 Today\'s LeetCode Daily: ${daily.question.title}`,
+    '⏳ There is still time—solve it now and don\'t lose your streak! 🔥',
     '',
-    '✅ Completed:',
-    formatList(completed, '🎉', '🎉 Nobody yet — there is still time!'),
+    '✅ Completed 🎉',
+    formatList(completed, '🥳', 'No one yet — go get it! 💪'),
     '',
-    '⚠️ Still pending:',
-    formatList(notCompleted, '🚨', '🎉 Everyone has completed it!'),
+    '⚠️ Still Pending 🚨',
+    formatList(notCompleted, '👀', '🎊 Everyone has completed it!'),
   ].join('\n');
 
   const telegramResponse = await fetch(
