@@ -1,0 +1,12 @@
+{
+  "name": "leetcode-daily-streak-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Posts LeetCode Daily Challenge completion status to Telegram.",
+  "scripts": {
+    "start": "node scripts/check-leetcode-daily.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
