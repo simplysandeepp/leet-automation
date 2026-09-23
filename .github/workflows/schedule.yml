@@ -2,8 +2,8 @@ name: LeetCode Daily Challenge Streak Checker
 
 on:
   schedule:
-    # GitHub Actions cron uses UTC: 16:30 UTC = 10:00 PM Asia/Kolkata (IST).
-    - cron: '30 16 * * *'
+    # GitHub Actions cron uses UTC: 17:00 UTC = 10:30 PM Asia/Kolkata (IST).
+    - cron: '0 17 * * *'
   workflow_dispatch:
 
 permissions:
