@@ -1,30 +1,162 @@
-name: LeetCode Daily Challenge Streak Checker
+name: LeetCode Daily Reminders
 
 on:
   schedule:
-    # GitHub Actions cron uses UTC: 17:00 UTC = 10:30 PM Asia/Kolkata (IST).
-    - cron: '0 17 * * *'
+    # GitHub starts scheduled runs hours late, so runs start in the afternoon
+    # and sleep until the exact send time. The extra crons are backups in case
+    # GitHub drops one; duplicates are skipped.
+    - cron: '0 12 * * *'
+    - cron: '0 13 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 15 * * *'
+    - cron: '0 16 * * *'
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Send right now to
+        type: choice
+        options: [both, telegram, whatsapp]
+        default: both
 
 permissions:
   contents: read
+  actions: write
+
+concurrency:
+  group: daily-reminders
+  cancel-in-progress: false
+
+env:
+  # All times are UTC. 16:30 UTC = 10:00 PM IST, 17:00 UTC = 10:30 PM IST,
+  # 18:29 UTC = 11:59 PM IST (after that the day's reminder is skipped).
+  WHATSAPP_WAKE_UTC: '16:25'
+  WHATSAPP_SEND_UTC: '16:30'
+  TELEGRAM_SEND_UTC: '17:00'
+  CUTOFF_UTC: '18:29'
+  MAX_WAIT_SECONDS: '20400'
 
 jobs:
-  check-daily-challenge:
+  whatsapp:
+    if: github.event_name == 'schedule' || inputs.channel != 'telegram'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350
     steps:
+      - name: Wait until 9:55 PM IST
+        id: wait
+        if: github.event_name == 'schedule'
+        run: |
+          now=$(date -u +%s)
+          wake=$(date -u -d "today $WHATSAPP_WAKE_UTC" +%s)
+          cutoff=$(date -u -d "today $CUTOFF_UTC" +%s)
+          if [ "$now" -gt "$cutoff" ] || [ $((wake - now)) -gt "$MAX_WAIT_SECONDS" ]; then
+            echo "Outside today's send window, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$now" -lt "$wake" ]; then
+            echo "Sleeping $((wake - now))s until $WHATSAPP_WAKE_UTC UTC"
+            sleep $((wake - now))
+          fi
+
+      - name: Wake the Render server and wait for WhatsApp
+        if: steps.wait.outputs.skip != 'true'
+        env:
+          BOT_URL: ${{ secrets.WHATSAPP_BOT_URL }}
+        run: |
+          # A sleeping Render free instance takes up to a minute to boot, then
+          # WhatsApp needs a few seconds to reconnect.
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 90 "$BOT_URL/health"; then echo; exit 0; fi
+            echo " (not ready yet, retry $i)"
+            sleep 10
+          done
+          echo "::warning::WhatsApp did not report connected; trying to send anyway."
+
+      - name: Wait until 10:00 PM IST
+        if: github.event_name == 'schedule' && steps.wait.outputs.skip != 'true'
+        run: |
+          now=$(date -u +%s)
+          send=$(date -u -d "today $WHATSAPP_SEND_UTC" +%s)
+          if [ "$now" -lt "$send" ]; then sleep $((send - now)); fi
+
+      - name: Send WhatsApp reminder
+        if: steps.wait.outputs.skip != 'true'
+        env:
+          BOT_URL: ${{ secrets.WHATSAPP_BOT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && '?force=1' || '' }}
+        run: |
+          # The server records each day's send in MongoDB, so a retry or a
+          # second trigger never posts twice.
+          for i in 1 2 3; do
+            if curl -fsS --max-time 180 -X POST -H "x-cron-secret: $CRON_SECRET" "$BOT_URL/send-reminder$FORCE"; then
+              echo; exit 0
+            fi
+            echo " (send failed, retry $i)"
+            sleep 60
+          done
+          exit 1
+
+  telegram:
+    if: github.event_name == 'schedule' || inputs.channel != 'whatsapp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Wait until 10:30 PM IST
+        id: wait
+        run: |
+          echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "schedule" ]; then exit 0; fi
+          now=$(date -u +%s)
+          send=$(date -u -d "today $TELEGRAM_SEND_UTC" +%s)
+          cutoff=$(date -u -d "today $CUTOFF_UTC" +%s)
+          if [ "$now" -gt "$cutoff" ] || [ $((send - now)) -gt "$MAX_WAIT_SECONDS" ]; then
+            echo "Outside today's send window, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$now" -lt "$send" ]; then
+            echo "Sleeping $((send - now))s until $TELEGRAM_SEND_UTC UTC"
+            sleep $((send - now))
+          fi
+
+      - name: Check if today's Telegram reminder already went out
+        id: sent
+        if: github.event_name == 'schedule' && steps.wait.outputs.skip != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .telegram-sent
+          key: telegram-sent-${{ steps.wait.outputs.date }}
+          lookup-only: true
+
       - name: Check out repository
+        if: steps.wait.outputs.skip != 'true' && steps.sent.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
 
       - name: Set up Node.js
+        if: steps.wait.outputs.skip != 'true' && steps.sent.outputs.cache-hit != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Check and post LeetCode Daily Challenge status
+        if: steps.wait.outputs.skip != 'true' && steps.sent.outputs.cache-hit != 'true'
         env:
           LEETCODE_USERS: ${{ secrets.LEETCODE_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: npm start
+
+      - name: Mark today's Telegram reminder as sent
+        if: github.event_name == 'schedule' && steps.wait.outputs.skip != 'true' && steps.sent.outputs.cache-hit != 'true'
+        run: touch .telegram-sent
+
+      - name: Save sent marker
+        if: github.event_name == 'schedule' && steps.wait.outputs.skip != 'true' && steps.sent.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .telegram-sent
+          key: telegram-sent-${{ steps.wait.outputs.date }}
+
+      # GitHub disables scheduled workflows in repos with no activity for 60 days.
+      - name: Keep the schedule enabled
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/schedule.yml/enable" || true

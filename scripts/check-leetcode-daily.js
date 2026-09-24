@@ -43,7 +43,10 @@ function requiredEnvironment(name) {
   return value;
 }
 
-async function leetCodeGraphQL(query, variables = {}) {
+const MAX_ATTEMPTS = 3;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function leetCodeGraphQLOnce(query, variables) {
   const response = await fetch(LEETCODE_GRAPHQL_URL, {
     method: 'POST',
     headers: {
@@ -52,10 +55,11 @@ async function leetCodeGraphQL(query, variables = {}) {
       Referer: 'https://leetcode.com/',
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!response.ok) {
-    throw new Error(`LeetCode GraphQL returned HTTP ${response.status}: ${await response.text()}`);
+    throw new Error(`LeetCode GraphQL returned HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
   }
 
   const body = await response.json();
@@ -63,6 +67,18 @@ async function leetCodeGraphQL(query, variables = {}) {
     throw new Error(`LeetCode GraphQL error: ${body.errors.map((error) => error.message).join('; ')}`);
   }
   return body.data;
+}
+
+async function leetCodeGraphQL(query, variables = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await leetCodeGraphQLOnce(query, variables);
+    } catch (error) {
+      if (attempt >= MAX_ATTEMPTS) throw error;
+      console.error(`LeetCode request failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${error.message}`);
+      await sleep(2000 * attempt);
+    }
+  }
 }
 
 function startOfUtcDayUnixSeconds(dateString) {
@@ -99,11 +115,18 @@ async function main() {
   const dailyStart = startOfUtcDayUnixSeconds(daily.date);
   const results = await Promise.all(usernames.map(async (username) => {
     try {
-      const data = await leetCodeGraphQL(RECENT_ACCEPTED_SUBMISSIONS_QUERY, {
-        username,
-        limit: RECENT_SUBMISSION_LIMIT,
-      });
-      const submissions = data.recentAcSubmissionList ?? [];
+      // LeetCode intermittently returns an empty list for public profiles,
+      // so retry an empty result before treating the user as unverifiable.
+      let submissions = [];
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const data = await leetCodeGraphQL(RECENT_ACCEPTED_SUBMISSIONS_QUERY, {
+          username,
+          limit: RECENT_SUBMISSION_LIMIT,
+        });
+        submissions = data.recentAcSubmissionList ?? [];
+        if (submissions.length) break;
+        if (attempt < MAX_ATTEMPTS) await sleep(2000 * attempt);
+      }
       // LeetCode may return no public history for a profile. Do not label that
       // user as pending when the API cannot verify their status.
       if (!submissions.length) return { username, status: 'unavailable' };
@@ -138,6 +161,11 @@ async function main() {
       ? unavailable.map((username) => `• @${username.replace(/^@/, '')} — recent submissions may be hidden.`).join('\n')
       : 'No verification issues.',
   ].join('\n');
+
+  if (process.env.DRY_RUN === '1') {
+    console.log(message);
+    return;
+  }
 
   const telegramResponse = await fetch(
     `https://api.telegram.org/bot${telegramBotToken}/sendMessage`,
